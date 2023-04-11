@@ -31,8 +31,19 @@ type LogMessage struct {
 	Msg    string    `json:"msg"`    // body of the message
 }
 
-func (m *LogMessage) String() string {
-	return m.Time.Format(time.RFC3339) + " " + m.Source + " " + m.Msg
+func (m *LogMessage) String(logFormat string) string {
+	switch logFormat {
+	case "time-and-source":
+		return m.Time.Format(time.RFC3339) + " " + m.Source + " " + m.Msg
+	case "time":
+		return m.Time.Format(time.RFC3339) + " " + m.Msg
+	case "source":
+		return m.Source + " " + m.Msg
+	case "raw":
+		return m.Msg
+	default:
+		return m.Time.Format(time.RFC3339) + " " + m.Source + " " + m.Msg
+	}
 }
 
 // LogFile is where we write LogMessages to
@@ -62,8 +73,8 @@ func NewLogFile(dir, name string) (*LogFile, error) {
 }
 
 // Write appends a message to the log file
-func (l *LogFile) Write(m *LogMessage) error {
-	s := m.String() + "\n"
+func (l *LogFile) Write(m *LogMessage, formatLog string) error {
+	s := m.String(formatLog) + "\n"
 	_, err := io.WriteString(l.File, s)
 	if err == nil {
 		l.BytesWritten += len(s)
@@ -113,6 +124,7 @@ func main() {
 	logDir := flag.String("log-dir", "/var/log", "Directory containing log files")
 	maxLogFiles := flag.Int("max-log-files", 10, "Maximum number of rotated log files before deletion")
 	maxLogSize := flag.Int("max-log-size", mb, "Maximum size of a log file before rotation")
+	logFormat := flag.String("log-format", "time-and-source", "Format of the logs, available options are one of [time-and-source, time, source, raw]")
 	flag.Parse()
 
 	addr := net.UnixAddr{
@@ -155,7 +167,7 @@ func main() {
 			}
 			logs[msg.Source] = logF
 		}
-		if err = logF.Write(&msg); err != nil {
+		if err = logF.Write(&msg, *logFormat); err != nil {
 			log.Printf("Failed to write to log file %s: %v", msg.Source, err)
 			if err := logF.Close(); err != nil {
 				log.Printf("Failed to close log file %s: %v", msg.Source, err)
