@@ -73,8 +73,8 @@ func NewLogFile(dir, name string) (*LogFile, error) {
 }
 
 // Write appends a message to the log file
-func (l *LogFile) Write(m *LogMessage, formatLog string) error {
-	s := m.String(formatLog) + "\n"
+func (l *LogFile) Write(m *LogMessage, logFormat string) error {
+	s := m.String(logFormat) + "\n"
 	_, err := io.WriteString(l.File, s)
 	if err == nil {
 		l.BytesWritten += len(s)
