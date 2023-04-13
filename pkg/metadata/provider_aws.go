@@ -90,6 +90,34 @@ func awsMetaGet(lookupName string, fileName string, fileMode os.FileMode) {
 	}
 }
 
+func signRequest(req *http.Request, client *http.Client) (*http.Request, error) {
+	tokenReq, err := http.NewRequest("PUT", "http://169.254.169.254/latest/api/token", nil)
+	if err != nil {
+		return req, err
+	}
+
+	tokenReq.Header.Add("X-aws-ec2-metadata-token-ttl-seconds", "21600")
+
+	tokenRes, err := client.Do(tokenReq)
+	if err != nil {
+		return req, err
+	}
+	if tokenRes.StatusCode != 200 {
+		return req, fmt.Errorf("AWS: Status not ok: %d", tokenRes.StatusCode)
+	}
+
+	tokenBytes, err := io.ReadAll(tokenRes.Body)
+	if err != nil {
+		return req, err
+	}
+
+	token := string(tokenBytes)
+
+	req.Header.Add("X-aws-ec2-metadata-token", token)
+
+	return req, nil
+}
+
 // awsGet requests and extracts the requested URL
 func awsGet(url string) ([]byte, error) {
 	var client = &http.Client{
@@ -101,7 +129,12 @@ func awsGet(url string) ([]byte, error) {
 		return nil, fmt.Errorf("AWS: http.NewRequest failed: %s", err)
 	}
 
-	resp, err := client.Do(req)
+	signedReq, err := signRequest(req, client)
+	if err != nil {
+		return nil, fmt.Errorf("AWS: Could not contact metadata service: %s", err)
+	}
+
+	resp, err := client.Do(signedReq)
 	if err != nil {
 		return nil, fmt.Errorf("AWS: Could not contact metadata service: %s", err)
 	}
