@@ -131,7 +131,7 @@ func awsGet(url string) ([]byte, error) {
 
 	signedReq, err := signRequest(req, client)
 	if err != nil {
-		return nil, fmt.Errorf("AWS: Could not contact metadata service: %s", err)
+		return nil, fmt.Errorf("AWS: Could not sign metadata request: %s", err)
 	}
 
 	resp, err := client.Do(signedReq)
