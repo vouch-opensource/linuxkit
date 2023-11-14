@@ -19,9 +19,8 @@ import (
 
 const timeoutVar = "LINUXKIT_UPLOAD_TIMEOUT"
 
-const max_part_size = 10 * 1024 * 1024
+const max_part_size int64 = 10 * 1024 * 1024
 
-//helper function to build the string for the range of bits to copy
 func buildCopySourceRange(start int64, objectSize int64) string {
 	end := start + max_part_size - 1
 	if end > objectSize {
@@ -116,12 +115,12 @@ func pushAWSCmd() *cobra.Command {
 			var i int64
 			var partNumber int64 = 1
 			parts := make([]*s3.CompletedPart, 0)
-			numUploads := aws.Int64(fi.Size()) / max_part_size
+			var numUploads int64 = *aws.Int64(fi.Size()) / max_part_size
 
-			log.Infof("Will attempt upload in %d number of parts to %s", numUploads, aws.String(dst))
+			log.Infof("Will attempt upload in %d number of parts to %s", numUploads, *aws.String(dst))
 
-			for i = 0; i < aws.Int64(fi.Size()); i += max_part_size {
-				copyRange := buildCopySourceRange(i, aws.Int64(fi.Size()))
+			for i = 0; i < *aws.Int64(fi.Size()); i += max_part_size {
+				copyRange := buildCopySourceRange(i, *aws.Int64(fi.Size()))
 				partInput := s3.UploadPartInput{
 					Bucket:        aws.String(bucket),
 					Key:           aws.String(dst),
@@ -146,7 +145,7 @@ func pushAWSCmd() *cobra.Command {
 				//copy etag and part number from response as it is needed for completion
 				if partResp != nil {
 					partNum := partNumber
-					etag := strings.Trim(*partResp.CopyPartResult.ETag, "\"")
+					etag := strings.Trim(*partResp.ETag, "\"")
 					cPart := s3.CompletedPart{
 						ETag:       &etag,
 						PartNumber: &partNum,
@@ -156,7 +155,7 @@ func pushAWSCmd() *cobra.Command {
 				}
 				partNumber++
 				if partNumber%50 == 0 {
-					log.Infof("Completed part %d of %d to %s", partNumber, numUploads, aws.String(dst))
+					log.Infof("Completed part %d of %d to %s", partNumber, numUploads, *aws.String(dst))
 				}
 			}
 
@@ -178,9 +177,8 @@ func pushAWSCmd() *cobra.Command {
 				return fmt.Errorf("Error completing upload: %w", err)
 			}
 			if compOutput != nil {
-				log.Infof("Successfully uploaded Key: %s to Bucket: %s", aws.String(dst), aws.String(dst))
+				log.Infof("Successfully uploaded Key: %s to Bucket: %s", *aws.String(dst), *aws.String(dst))
 			}
-			return nil
 
 			compute := ec2.New(sess)
 
