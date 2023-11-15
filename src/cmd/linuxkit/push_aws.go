@@ -135,7 +135,7 @@ func pushAWSCmd() *cobra.Command {
 
 				log.Infof("Will attempt upload in %d number of parts to %s", numUploads, *aws.String(dst))
 
-				for partNumber := 0; partNumber <= numUploads; partNumber++ {
+				for partNumber := 0; partNumber < numUploads; partNumber++ {
 					// Calculate the byte range for this part
 					start := int64(partNumber) * multipartUploadPartSize
 					end := int64(math.Min(float64(start+multipartUploadPartSize), float64(fileSize)))
