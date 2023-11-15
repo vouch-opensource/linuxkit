@@ -1,11 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -19,19 +20,9 @@ import (
 
 const timeoutVar = "LINUXKIT_UPLOAD_TIMEOUT"
 
-const min_part_size int64 = 5 * 1024 * 1024 // 5Mib
+const minSizeForMultipartUpload int64 = 4 * 1024 * 1024 * 1024 // 4Gib
 
-const max_part_size int64 = 1024 * 1024 * 1024 // 1Gib
-
-func buildCopySourceRange(start int64, objectSize int64) string {
-	end := start + max_part_size - 1
-	if end > objectSize {
-		end = objectSize - 1
-	}
-	startRange := strconv.FormatInt(start, 10)
-	stopRange := strconv.FormatInt(end, 10)
-	return "bytes=" + startRange + "-" + stopRange
-}
+const multipartUploadPartSize int64 = 1024 * 1024 * 1024 // 1Gib
 
 func pushAWSCmd() *cobra.Command {
 	var (
@@ -98,7 +89,7 @@ func pushAWSCmd() *cobra.Command {
 			// if it is, then just do a regular upload
 			fileSize := fi.Size()
 
-			if *aws.Int64(fileSize) <= min_part_size {
+			if *aws.Int64(fileSize) <= minSizeForMultipartUpload {
 				log.Debugf("Using regular upload for file with size %d", fileSize)
 
 				putParams := &s3.PutObjectInput{
@@ -138,44 +129,52 @@ func pushAWSCmd() *cobra.Command {
 					return fmt.Errorf("No upload id found in start upload request: %v", err)
 				}
 
-				var partNumber int64
-				parts := make([]*s3.CompletedPart, 0)
-				var numUploads int64 = *aws.Int64(fileSize) / max_part_size
+				// var partNumber int64
+				var numUploads int = int(math.Ceil(float64(*aws.Int64(fileSize)) / float64(multipartUploadPartSize)))
+				parts := make([]*s3.CompletedPart, numUploads)
 
 				log.Infof("Will attempt upload in %d number of parts to %s", numUploads, *aws.String(dst))
 
-				for partNumber = 1; partNumber <= numUploads; partNumber++ {
-					copyRange := buildCopySourceRange(partNumber, *aws.Int64(fileSize))
-					partInput := s3.UploadPartInput{
+				for partNumber := 0; partNumber <= numUploads; partNumber++ {
+					// Calculate the byte range for this part
+					start := int64(partNumber) * multipartUploadPartSize
+					end := int64(math.Min(float64(start+multipartUploadPartSize), float64(fileSize)))
+					length := end - start
+					rangeStr := fmt.Sprintf("bytes %d-%d/%d", start, end-1, fileSize)
+
+					log.Debugf("Attempting to upload part %d with range %s", partNumber, rangeStr)
+
+					// Read the part data
+					partData := make([]byte, length)
+					_, err := f.ReadAt(partData, start)
+					if err != nil {
+						return err
+					}
+
+					partInput := &s3.UploadPartInput{
 						Bucket:     aws.String(bucket),
 						Key:        aws.String(dst),
-						Body:       aws.ReadSeekCloser(f),
-						PartNumber: &partNumber,
-						UploadId:   &uploadId,
+						Body:       bytes.NewReader(partData),
+						PartNumber: aws.Int64(int64(partNumber) + 1),
+						UploadId:   aws.String(uploadId),
 					}
-					log.Debugf("Attempting to upload part %d range: %s", partNumber, copyRange)
-					partResp, err := storage.UploadPart(&partInput)
+					log.Debugf("Attempting to upload part %d", partNumber)
+					partResp, err := storage.UploadPart(partInput)
 
 					if err != nil {
 						log.Error("Attempting to abort upload")
 						abortIn := s3.AbortMultipartUploadInput{
-							UploadId: &uploadId,
+							UploadId: aws.String(uploadId),
 						}
 						//ignoring any errors with aborting the copy
 						storage.AbortMultipartUploadRequest(&abortIn)
 						return fmt.Errorf("Error uploading part %d : %w", partNumber, err)
 					}
 
-					//copy etag and part number from response as it is needed for completion
-					if partResp != nil {
-						partNum := partNumber
-						etag := strings.Trim(*partResp.ETag, "\"")
-						cPart := s3.CompletedPart{
-							ETag:       &etag,
-							PartNumber: &partNum,
-						}
-						parts = append(parts, &cPart)
-						log.Debugf("Successfully upload part %d of %d", partNumber, numUploads)
+					// Save the completed part
+					parts[partNumber] = &s3.CompletedPart{
+						ETag:       partResp.ETag,
+						PartNumber: aws.Int64(int64(partNumber) + 1),
 					}
 				}
 
@@ -189,7 +188,7 @@ func pushAWSCmd() *cobra.Command {
 				complete := s3.CompleteMultipartUploadInput{
 					Bucket:          aws.String(bucket),
 					Key:             aws.String(dst),
-					UploadId:        &uploadId,
+					UploadId:        aws.String(uploadId),
 					MultipartUpload: &mpu,
 				}
 				compOutput, err := storage.CompleteMultipartUpload(&complete)
