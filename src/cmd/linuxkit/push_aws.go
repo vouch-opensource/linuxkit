@@ -98,7 +98,7 @@ func pushAWSCmd() *cobra.Command {
 			// if it is, then just do a regular upload
 			fileSize := fi.Size()
 
-			if fileSize < min_part_size {
+			if *aws.Int64(fileSize) <= min_part_size {
 				log.Debugf("Using regular upload for file with size %d", fileSize)
 
 				putParams := &s3.PutObjectInput{
@@ -138,15 +138,14 @@ func pushAWSCmd() *cobra.Command {
 					return fmt.Errorf("No upload id found in start upload request: %v", err)
 				}
 
-				var i int64
-				var partNumber int64 = 1
+				var partNumber int64
 				parts := make([]*s3.CompletedPart, 0)
 				var numUploads int64 = *aws.Int64(fileSize) / max_part_size
 
 				log.Infof("Will attempt upload in %d number of parts to %s", numUploads, *aws.String(dst))
 
-				for i = 0; i <= *aws.Int64(fileSize); i += max_part_size {
-					copyRange := buildCopySourceRange(i, *aws.Int64(fileSize))
+				for partNumber = 1; partNumber <= numUploads; partNumber++ {
+					copyRange := buildCopySourceRange(partNumber, *aws.Int64(fileSize))
 					partInput := s3.UploadPartInput{
 						Bucket:     aws.String(bucket),
 						Key:        aws.String(dst),
@@ -176,11 +175,7 @@ func pushAWSCmd() *cobra.Command {
 							PartNumber: &partNum,
 						}
 						parts = append(parts, &cPart)
-						log.Debugf("Successfully upload part %d of %s", partNumber, uploadId)
-					}
-					partNumber++
-					if partNumber%50 == 0 {
-						log.Infof("Completed part %d of %d to %s", partNumber, numUploads, *aws.String(dst))
+						log.Debugf("Successfully upload part %d of %d", partNumber, numUploads)
 					}
 				}
 
