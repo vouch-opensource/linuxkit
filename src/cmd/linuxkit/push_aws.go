@@ -19,7 +19,9 @@ import (
 
 const timeoutVar = "LINUXKIT_UPLOAD_TIMEOUT"
 
-const max_part_size int64 = 512 * 1024 * 1024
+const min_part_size int64 = 5 * 1024 * 1024 // 5Mib
+
+const max_part_size int64 = 1024 * 1024 * 1024 // 1Gib
 
 func buildCopySourceRange(start int64, objectSize int64) string {
 	end := start + max_part_size - 1
@@ -92,91 +94,116 @@ func pushAWSCmd() *cobra.Command {
 
 			dst := name + filepath.Ext(path)
 
-			//struct for starting a multipart upload
-			startInput := s3.CreateMultipartUploadInput{
-				Bucket: aws.String(bucket),
-				Key:    aws.String(dst),
-			}
+			// check if the file size is less than the minimum part size
+			// if it is, then just do a regular upload
+			fileSize := fi.Size()
 
-			var uploadId string
-			createOutput, err := storage.CreateMultipartUploadWithContext(ctx, &startInput)
-			if err != nil {
-				return err
-			}
-			if createOutput != nil {
-				if createOutput.UploadId != nil {
-					uploadId = *createOutput.UploadId
+			if fileSize < min_part_size {
+				log.Debugf("Using regular upload for file with size %d", fileSize)
+
+				putParams := &s3.PutObjectInput{
+					Bucket:        aws.String(bucket),
+					Key:           aws.String(dst),
+					Body:          f,
+					ContentLength: aws.Int64(fileSize),
+					ContentType:   aws.String("application/octet-stream"),
 				}
-			}
-			if uploadId == "" {
-				return fmt.Errorf("No upload id found in start upload request: %v", err)
-			}
 
-			var i int64
-			var partNumber int64 = 1
-			parts := make([]*s3.CompletedPart, 0)
-			var numUploads int64 = *aws.Int64(fi.Size()) / max_part_size
+				log.Debugf("PutObject:\n%v", putParams)
 
-			log.Infof("Will attempt upload in %d number of parts to %s", numUploads, *aws.String(dst))
-
-			for i = 0; i <= *aws.Int64(fi.Size()); i += max_part_size {
-				copyRange := buildCopySourceRange(i, *aws.Int64(fi.Size()))
-				partInput := s3.UploadPartInput{
-					Bucket:     aws.String(bucket),
-					Key:        aws.String(dst),
-					Body:       aws.ReadSeekCloser(f),
-					PartNumber: &partNumber,
-					UploadId:   &uploadId,
-				}
-				log.Debugf("Attempting to upload part %d range: %s", partNumber, copyRange)
-				partResp, err := storage.UploadPart(&partInput)
-
+				_, err = storage.PutObjectWithContext(ctx, putParams)
 				if err != nil {
-					log.Error("Attempting to abort upload")
-					abortIn := s3.AbortMultipartUploadInput{
-						UploadId: &uploadId,
+					return fmt.Errorf("Error uploading to S3: %v", err)
+				}
+			} else {
+				log.Debugf("Using multipart upload for file with size %d", fileSize)
+
+				//struct for starting a multipart upload
+				startInput := s3.CreateMultipartUploadInput{
+					Bucket: aws.String(bucket),
+					Key:    aws.String(dst),
+				}
+
+				var uploadId string
+				createOutput, err := storage.CreateMultipartUploadWithContext(ctx, &startInput)
+				if err != nil {
+					return err
+				}
+				if createOutput != nil {
+					if createOutput.UploadId != nil {
+						uploadId = *createOutput.UploadId
 					}
-					//ignoring any errors with aborting the copy
-					storage.AbortMultipartUploadRequest(&abortIn)
-					return fmt.Errorf("Error uploading part %d : %w", partNumber, err)
+				}
+				if uploadId == "" {
+					return fmt.Errorf("No upload id found in start upload request: %v", err)
 				}
 
-				//copy etag and part number from response as it is needed for completion
-				if partResp != nil {
-					partNum := partNumber
-					etag := strings.Trim(*partResp.ETag, "\"")
-					cPart := s3.CompletedPart{
-						ETag:       &etag,
-						PartNumber: &partNum,
+				var i int64
+				var partNumber int64 = 1
+				parts := make([]*s3.CompletedPart, 0)
+				var numUploads int64 = *aws.Int64(fileSize) / max_part_size
+
+				log.Infof("Will attempt upload in %d number of parts to %s", numUploads, *aws.String(dst))
+
+				for i = 0; i <= *aws.Int64(fileSize); i += max_part_size {
+					copyRange := buildCopySourceRange(i, *aws.Int64(fileSize))
+					partInput := s3.UploadPartInput{
+						Bucket:     aws.String(bucket),
+						Key:        aws.String(dst),
+						Body:       aws.ReadSeekCloser(f),
+						PartNumber: &partNumber,
+						UploadId:   &uploadId,
 					}
-					parts = append(parts, &cPart)
-					log.Debugf("Successfully upload part %d of %s", partNumber, uploadId)
-				}
-				partNumber++
-				if partNumber%50 == 0 {
-					log.Infof("Completed part %d of %d to %s", partNumber, numUploads, *aws.String(dst))
-				}
-			}
+					log.Debugf("Attempting to upload part %d range: %s", partNumber, copyRange)
+					partResp, err := storage.UploadPart(&partInput)
 
-			//create struct for completing the upload
-			mpu := s3.CompletedMultipartUpload{
-				Parts: parts,
-			}
+					if err != nil {
+						log.Error("Attempting to abort upload")
+						abortIn := s3.AbortMultipartUploadInput{
+							UploadId: &uploadId,
+						}
+						//ignoring any errors with aborting the copy
+						storage.AbortMultipartUploadRequest(&abortIn)
+						return fmt.Errorf("Error uploading part %d : %w", partNumber, err)
+					}
 
-			//complete actual upload
-			//does not actually copy if the complete command is not received
-			complete := s3.CompleteMultipartUploadInput{
-				Bucket:          aws.String(bucket),
-				Key:             aws.String(dst),
-				UploadId:        &uploadId,
-				MultipartUpload: &mpu,
-			}
-			compOutput, err := storage.CompleteMultipartUpload(&complete)
-			if err != nil {
-				return fmt.Errorf("Error completing upload: %w", err)
-			}
-			if compOutput != nil {
-				log.Infof("Successfully uploaded Key: %s to Bucket: %s", *aws.String(dst), *aws.String(dst))
+					//copy etag and part number from response as it is needed for completion
+					if partResp != nil {
+						partNum := partNumber
+						etag := strings.Trim(*partResp.ETag, "\"")
+						cPart := s3.CompletedPart{
+							ETag:       &etag,
+							PartNumber: &partNum,
+						}
+						parts = append(parts, &cPart)
+						log.Debugf("Successfully upload part %d of %s", partNumber, uploadId)
+					}
+					partNumber++
+					if partNumber%50 == 0 {
+						log.Infof("Completed part %d of %d to %s", partNumber, numUploads, *aws.String(dst))
+					}
+				}
+
+				//create struct for completing the upload
+				mpu := s3.CompletedMultipartUpload{
+					Parts: parts,
+				}
+
+				//complete actual upload
+				//does not actually copy if the complete command is not received
+				complete := s3.CompleteMultipartUploadInput{
+					Bucket:          aws.String(bucket),
+					Key:             aws.String(dst),
+					UploadId:        &uploadId,
+					MultipartUpload: &mpu,
+				}
+				compOutput, err := storage.CompleteMultipartUpload(&complete)
+				if err != nil {
+					return fmt.Errorf("Error completing upload: %w", err)
+				}
+				if compOutput != nil {
+					log.Infof("Successfully uploaded Key: %s to Bucket: %s", *aws.String(dst), *aws.String(dst))
+				}
 			}
 
 			compute := ec2.New(sess)
