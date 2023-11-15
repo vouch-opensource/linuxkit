@@ -119,7 +119,7 @@ func pushAWSCmd() *cobra.Command {
 
 			log.Infof("Will attempt upload in %d number of parts to %s", numUploads, *aws.String(dst))
 
-			for i = 0; i < *aws.Int64(fi.Size()); i += max_part_size {
+			for i = 0; i <= *aws.Int64(fi.Size()); i += max_part_size {
 				copyRange := buildCopySourceRange(i, *aws.Int64(fi.Size()))
 				partInput := s3.UploadPartInput{
 					Bucket:     aws.String(bucket),
