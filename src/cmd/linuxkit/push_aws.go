@@ -19,7 +19,7 @@ import (
 
 const timeoutVar = "LINUXKIT_UPLOAD_TIMEOUT"
 
-const max_part_size int64 = 10 * 1024 * 1024
+const max_part_size int64 = 512 * 1024 * 1024
 
 func buildCopySourceRange(start int64, objectSize int64) string {
 	end := start + max_part_size - 1
@@ -122,12 +122,11 @@ func pushAWSCmd() *cobra.Command {
 			for i = 0; i < *aws.Int64(fi.Size()); i += max_part_size {
 				copyRange := buildCopySourceRange(i, *aws.Int64(fi.Size()))
 				partInput := s3.UploadPartInput{
-					Bucket:        aws.String(bucket),
-					Key:           aws.String(dst),
-					Body:          f,
-					ContentLength: aws.Int64(fi.Size()),
-					PartNumber:    &partNumber,
-					UploadId:      &uploadId,
+					Bucket:     aws.String(bucket),
+					Key:        aws.String(dst),
+					Body:       aws.ReadSeekCloser(f),
+					PartNumber: &partNumber,
+					UploadId:   &uploadId,
 				}
 				log.Debugf("Attempting to upload part %d range: %s", partNumber, copyRange)
 				partResp, err := storage.UploadPart(&partInput)
