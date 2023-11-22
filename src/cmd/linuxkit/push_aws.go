@@ -31,6 +31,7 @@ func pushAWSCmd() *cobra.Command {
 		nameFlag    string
 		ena         bool
 		sriovNet    string
+		format      string
 		uefi        bool
 		tpm         bool
 	)
@@ -206,7 +207,7 @@ func pushAWSCmd() *cobra.Command {
 				Description: aws.String(fmt.Sprintf("LinuxKit: %s", name)),
 				DiskContainer: &ec2.SnapshotDiskContainer{
 					Description: aws.String(fmt.Sprintf("LinuxKit: %s disk", name)),
-					Format:      aws.String("raw"),
+					Format:      aws.String(format),
 					UserBucket: &ec2.UserBucket{
 						S3Bucket: aws.String(bucket),
 						S3Key:    aws.String(dst),
@@ -294,6 +295,7 @@ func pushAWSCmd() *cobra.Command {
 	cmd.Flags().StringVar(&nameFlag, "img-name", "", "Overrides the name used to identify the file in Amazon S3 and the VM image. Defaults to the base of 'path' with the file extension removed.")
 	cmd.Flags().BoolVar(&ena, "ena", false, "Enable ENA networking")
 	cmd.Flags().StringVar(&sriovNet, "sriov", "", "SRIOV network support, set to 'simple' to enable 82599 VF networking")
+	cmd.Flags().StringVar(&format, "format", "raw", "Image format, raw by default")
 	cmd.Flags().BoolVar(&uefi, "uefi", false, "Enable uefi boot mode.")
 	cmd.Flags().BoolVar(&tpm, "tpm", false, "Enable tpm device.")
 
